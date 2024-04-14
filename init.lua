@@ -213,7 +213,6 @@ if not vim.loop.fs_stat(lazypath) then
 end ---@diagnostic disable-next-line: undefined-field
 vim.opt.rtp:prepend(lazypath)
 
-
 -- [[ Configure and install plugins ]]
 --
 --  To check the current status of your plugins, run

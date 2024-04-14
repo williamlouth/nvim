@@ -8,15 +8,9 @@ local function my_on_attach(bufnr)
     return { desc = 'nvim-tree: ' .. desc, buffer = bufnr, noremap = true, silent = true, nowait = true }
   end
 
-  local function collapse()
-    local api = require 'nvim-tree.api'
-    api.node.navigate.parent()
-    api.node.open.edit()
-  end
-
   api.config.mappings.default_on_attach(bufnr)
   vim.keymap.set('n', 'l', api.node.open.edit, opts 'open')
-  vim.keymap.set('n', 'h', collapse, opts 'close')
+  vim.keymap.set('n', 'h', api.node.navigate.parent_close, opts 'close')
 end
 
 local function open_nvim_tree()
