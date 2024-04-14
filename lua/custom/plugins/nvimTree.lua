@@ -11,6 +11,7 @@ local function my_on_attach(bufnr)
   api.config.mappings.default_on_attach(bufnr)
   vim.keymap.set('n', 'l', api.node.open.edit, opts 'open')
   vim.keymap.set('n', 'h', api.node.navigate.parent_close, opts 'close')
+  vim.keymap.set('n', 'v', api.node.open.vertical, opts 'close')
 end
 
 local function open_nvim_tree()
