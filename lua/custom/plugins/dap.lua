@@ -3,7 +3,18 @@ local function my_on_attach()
   dap.adapters.gdb = {
     type = 'executable',
     name = 'gdb',
+    command = 'gdb',
     args = { '-i', 'dap' },
+  }
+  dap.adapters.cpptools = {
+    type = 'executable',
+    name = 'cpptools',
+    command = vim.fn.stdpath 'data' .. '/mason/bin/OpenDebugAD7',
+    args = {},
+    attach = {
+      pidProperty = 'processId',
+      pidSelect = 'ask',
+    },
   }
   dap.configurations.cpp = {
     {

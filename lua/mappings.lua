@@ -7,15 +7,21 @@ vim.keymap.set('n', '<F8>', require('dap').step_over, { desc = 'Step Over' })
 vim.keymap.set('n', '<F9>', require('dap').continue, { desc = 'Continue' })
 
 local function runNearest()
-  require('neotest').summary.close()
   require('neotest').summary.open()
   require('neotest').run.run()
 end
 local function runAll()
-  require('neotest').summary.close()
   require('neotest').summary.open()
   require('neotest').run.run(vim.fn.expand '%')
 end
+
+local function debugNearest()
+  require('neotest').summary.open()
+  require('neotest').run.run { strategy = 'dap' }
+end
+
+vim.keymap.set('n', '<s-F9>', debugNearest, { desc = 'debug nearest test' })
+vim.keymap.set('n', '<F18>', debugNearest, { desc = 'debug nearest test' })
 
 vim.keymap.set('n', '<s-F10>', runNearest, { desc = 'run nearest test' })
 vim.keymap.set('n', '<F22>', runNearest, { desc = 'run nearest test' })
