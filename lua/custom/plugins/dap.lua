@@ -32,5 +32,6 @@ end
 
 return {
   'mfussenegger/nvim-dap',
+  'nvim-neotest/nvim-nio',
   config = my_on_attach,
 }
