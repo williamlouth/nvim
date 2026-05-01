@@ -36,6 +36,9 @@ local panel = {
   collapsed = false,
 }
 
+-- Command queue: items are functions to call when the current job finishes
+local command_queue = {}
+
 local function notify(msg, level)
   vim.notify(msg, level or vim.log.levels.INFO, { title = 'CMake' })
 end
@@ -208,6 +211,24 @@ local function kill_job(tab)
   end
 end
 
+--- Check if any job is currently running
+local function any_job_running()
+  for _, job_id in pairs(panel.jobs) do
+    if job_id then
+      return true
+    end
+  end
+  return false
+end
+
+--- Drain the command queue (called after a job finishes)
+local function drain_queue()
+  if #command_queue > 0 then
+    local next_cmd = table.remove(command_queue, 1)
+    next_cmd()
+  end
+end
+
 --- Create a fresh terminal buffer for a tab and run a command
 --- @param tab string
 --- @param cmd string
@@ -222,6 +243,12 @@ local function run_in_panel(tab, cmd, on_complete)
 
   ensure_panel()
 
+  -- Expand if collapsed
+  if panel.collapsed then
+    panel.collapsed = false
+    vim.api.nvim_win_set_height(panel.win, panel.height)
+  end
+
   local cur_win = vim.api.nvim_get_current_win()
   vim.api.nvim_set_current_win(panel.win)
 
@@ -232,11 +259,16 @@ local function run_in_panel(tab, cmd, on_complete)
   local job_id = vim.fn.termopen(cmd, {
     on_exit = function(_, exit_code)
       panel.jobs[tab] = nil
-      if on_complete then
-        vim.schedule(function()
+      vim.schedule(function()
+        if panel_is_open() then
+          vim.wo[panel.win].winbar = panel_winbar()
+        end
+        if on_complete then
           on_complete(exit_code)
-        end)
-      end
+        else
+          drain_queue()
+        end
+      end)
     end,
   })
 
@@ -267,7 +299,7 @@ local function run_in_panel(tab, cmd, on_complete)
   vim.api.nvim_set_current_win(cur_win)
 end
 
---- Stop the currently active tab's job
+--- Stop the currently active tab's job and clear the queue
 function M.stop_current()
   local tab = panel.active_tab
   if not tab then
@@ -276,7 +308,8 @@ function M.stop_current()
   end
   if panel.jobs[tab] then
     kill_job(tab)
-    notify('Stopped: ' .. tab)
+    command_queue = {}
+    notify('Stopped: ' .. tab .. ' (queue cleared)')
     if panel_is_open() then
       vim.wo[panel.win].winbar = panel_winbar()
     end
@@ -344,76 +377,93 @@ local function ensure_cmake_api_query(build_dir)
 end
 
 function M.configure()
-  local configure_presets = get_configure_presets()
+  local function do_configure_now()
+    local configure_presets = get_configure_presets()
 
-  if #configure_presets > 0 then
-    local function do_configure(preset)
-      M.configure_preset = preset
-      -- Try to determine the build dir from the preset to set up the API query
-      local presets = read_presets()
-      if presets and presets.configurePresets then
-        for _, p in ipairs(presets.configurePresets) do
-          if p.name == preset and p.binaryDir then
-            local bd = p.binaryDir:gsub('%${sourceDir}', vim.fn.getcwd())
-            ensure_cmake_api_query(bd)
-            break
+    if #configure_presets > 0 then
+      local function do_configure(preset)
+        M.configure_preset = preset
+        local presets = read_presets()
+        if presets and presets.configurePresets then
+          for _, p in ipairs(presets.configurePresets) do
+            if p.name == preset and p.binaryDir then
+              local bd = p.binaryDir:gsub('%${sourceDir}', vim.fn.getcwd())
+              ensure_cmake_api_query(bd)
+              break
+            end
           end
         end
+        local cmd = 'cmake --preset ' .. preset
+        notify('Configuring preset: ' .. preset)
+        run_in_panel('configure', cmd)
       end
-      local cmd = 'cmake --preset ' .. preset
-      notify('Configuring preset: ' .. preset)
+
+      if M.configure_preset and vim.tbl_contains(configure_presets, M.configure_preset) then
+        do_configure(M.configure_preset)
+      else
+        vim.ui.select(configure_presets, { prompt = 'Select configure preset:' }, function(choice)
+          if choice then
+            do_configure(choice)
+          end
+        end)
+      end
+    else
+      local build_dir = get_build_dir()
+      vim.fn.mkdir(build_dir, 'p')
+      ensure_cmake_api_query(build_dir)
+      local cmd = string.format('cmake -B %s -DCMAKE_BUILD_TYPE=%s -G Ninja', M.build_dir, M.build_type)
+      notify('Configuring...')
       run_in_panel('configure', cmd)
     end
+  end
 
-    if M.configure_preset and vim.tbl_contains(configure_presets, M.configure_preset) then
-      do_configure(M.configure_preset)
-    else
-      vim.ui.select(configure_presets, { prompt = 'Select configure preset:' }, function(choice)
-        if choice then
-          do_configure(choice)
-        end
-      end)
-    end
+  if any_job_running() then
+    notify('Queued: configure')
+    table.insert(command_queue, do_configure_now)
   else
-    local build_dir = get_build_dir()
-    vim.fn.mkdir(build_dir, 'p')
-    ensure_cmake_api_query(build_dir)
-    local cmd = string.format('cmake -B %s -DCMAKE_BUILD_TYPE=%s -G Ninja', M.build_dir, M.build_type)
-    notify('Configuring...')
-    run_in_panel('configure', cmd)
+    do_configure_now()
   end
 end
 
 --- Build all targets (Shift+F11)
 function M.build()
-  local build_presets = get_build_presets()
+  local function do_build_now()
+    local build_presets = get_build_presets()
 
-  if #build_presets > 0 then
-    local function do_build(preset)
-      M.build_preset = preset
-      local cmd = 'cmake --build --preset ' .. preset
-      notify('Building all (preset: ' .. preset .. ')')
+    if #build_presets > 0 then
+      local function do_build(preset)
+        M.build_preset = preset
+        local cmd = 'cmake --build --preset ' .. preset
+        notify('Building all (preset: ' .. preset .. ')')
+        run_in_panel('build', cmd)
+      end
+
+      if M.build_preset and vim.tbl_contains(build_presets, M.build_preset) then
+        do_build(M.build_preset)
+      else
+        vim.ui.select(build_presets, { prompt = 'Select build preset:' }, function(choice)
+          if choice then
+            do_build(choice)
+          end
+        end)
+      end
+    else
+      local build_dir = get_build_dir()
+      if not file_exists(build_dir .. '/build.ninja') and not file_exists(build_dir .. '/Makefile') then
+        notify('No build system found. Run CMake configure first (Shift+F12).', vim.log.levels.WARN)
+        return
+      end
+      local cmd = 'cmake --build ' .. build_dir
+      notify('Building all...')
       run_in_panel('build', cmd)
     end
+  end
 
-    if M.build_preset and vim.tbl_contains(build_presets, M.build_preset) then
-      do_build(M.build_preset)
-    else
-      vim.ui.select(build_presets, { prompt = 'Select build preset:' }, function(choice)
-        if choice then
-          do_build(choice)
-        end
-      end)
-    end
+  if any_job_running() then
+    notify('Queued: build all')
+    table.insert(command_queue, do_build_now)
   else
-    local build_dir = get_build_dir()
-    if not file_exists(build_dir .. '/build.ninja') and not file_exists(build_dir .. '/Makefile') then
-      notify('No build system found. Run CMake configure first (Shift+F12).', vim.log.levels.WARN)
-      return
-    end
-    local cmd = 'cmake --build ' .. build_dir
-    notify('Building all...')
-    run_in_panel('build', cmd)
+    do_build_now()
   end
 end
 
@@ -424,48 +474,58 @@ function M.run_last()
     return
   end
 
-  local target = M.last_run_target
-  local build_dir = get_build_dir()
+  local function do_run_now()
+    local target = M.last_run_target
+    local build_dir = get_build_dir()
 
-  -- Helper to find and run the executable
-  local function do_run()
-    local executable = build_dir .. '/' .. target
-    if not file_exists(executable) then
-      local found = vim.fn.globpath(build_dir, '**/' .. vim.fn.fnamemodify(target, ':t'), false, true)
-      if type(found) == 'table' and #found > 0 then
-        executable = found[1]
-      elseif type(found) == 'string' and found ~= '' then
-        executable = vim.split(found, '\n')[1]
-      else
-        notify('Executable not found: ' .. target, vim.log.levels.WARN)
+    -- Helper to find and run the executable
+    local function do_run()
+      local executable = build_dir .. '/' .. target
+      if not file_exists(executable) then
+        local found = vim.fn.globpath(build_dir, '**/' .. vim.fn.fnamemodify(target, ':t'), false, true)
+        if type(found) == 'table' and #found > 0 then
+          executable = found[1]
+        elseif type(found) == 'string' and found ~= '' then
+          executable = vim.split(found, '\n')[1]
+        else
+          notify('Executable not found: ' .. target, vim.log.levels.WARN)
+          return
+        end
+      end
+      notify('Running: ' .. vim.fn.fnamemodify(executable, ':t'))
+      run_in_panel('run', executable)
+    end
+
+    -- Build the target first, then run on success
+    local build_presets = get_build_presets()
+    local cmd
+    if #build_presets > 0 and M.build_preset then
+      cmd = 'cmake --build --preset ' .. M.build_preset .. ' --target ' .. target
+    else
+      if not file_exists(build_dir .. '/build.ninja') and not file_exists(build_dir .. '/Makefile') then
+        notify('No build system found. Run CMake configure first (Shift+F12).', vim.log.levels.WARN)
         return
       end
+      cmd = 'cmake --build ' .. build_dir .. ' --target ' .. target
     end
-    notify('Running: ' .. vim.fn.fnamemodify(executable, ':t'))
-    run_in_panel('run', executable)
+
+    notify('Building ' .. target .. '...')
+    run_in_panel('build', cmd, function(exit_code)
+      if exit_code == 0 then
+        do_run()
+      else
+        notify('Build failed (exit ' .. exit_code .. '). Not running.', vim.log.levels.ERROR)
+        drain_queue()
+      end
+    end)
   end
 
-  -- Build the target first, then run on success
-  local build_presets = get_build_presets()
-  local cmd
-  if #build_presets > 0 and M.build_preset then
-    cmd = 'cmake --build --preset ' .. M.build_preset .. ' --target ' .. target
+  if any_job_running() then
+    notify('Queued: build + run ' .. M.last_run_target)
+    table.insert(command_queue, do_run_now)
   else
-    if not file_exists(build_dir .. '/build.ninja') and not file_exists(build_dir .. '/Makefile') then
-      notify('No build system found. Run CMake configure first (Shift+F12).', vim.log.levels.WARN)
-      return
-    end
-    cmd = 'cmake --build ' .. build_dir .. ' --target ' .. target
+    do_run_now()
   end
-
-  notify('Building ' .. target .. '...')
-  run_in_panel('build', cmd, function(exit_code)
-    if exit_code == 0 then
-      do_run()
-    else
-      notify('Build failed (exit ' .. exit_code .. '). Not running.', vim.log.levels.ERROR)
-    end
-  end)
 end
 
 --- Get list of targets using the CMake File API (codemodel)

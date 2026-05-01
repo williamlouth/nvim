@@ -25,6 +25,18 @@ return {
   config = function()
     require('nvim-tree').setup {
       on_attach = my_on_attach,
+      respect_buf_cwd = true,
+      update_focused_file = {
+        enable = true,
+      },
+      filters = {
+        custom = {},
+      },
+      actions = {
+        change_dir = {
+          restrict_above_cwd = true,
+        },
+      },
     }
   end,
 }
