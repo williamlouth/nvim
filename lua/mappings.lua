@@ -6,6 +6,25 @@ vim.keymap.set('n', '<F7>', require('dap').step_into, { desc = 'Step Into' })
 vim.keymap.set('n', '<F8>', require('dap').step_over, { desc = 'Step Over' })
 vim.keymap.set('n', '<F9>', require('dap').continue, { desc = 'Continue' })
 
+-- CMake workflow (CLion-style)
+local cmake = require 'custom.cmake'
+
+vim.keymap.set('n', '<s-F12>', cmake.configure, { desc = 'CMake Configure' })
+vim.keymap.set('n', '<F24>', cmake.configure, { desc = 'CMake Configure' })
+
+vim.keymap.set('n', '<s-F11>', cmake.build, { desc = 'CMake Build' })
+vim.keymap.set('n', '<F23>', cmake.build, { desc = 'CMake Build' })
+
+vim.keymap.set('n', '<s-F10>', cmake.run_last, { desc = 'Run Last Target' })
+vim.keymap.set('n', '<F22>', cmake.run_last, { desc = 'Run Last Target' })
+
+vim.keymap.set('n', '<leader>cr', cmake.select_target, { desc = '[C]Make Select [R]un Target' })
+vim.keymap.set('n', '<leader>ct', cmake.select_target, { desc = '[C]Make Select [T]arget' })
+vim.keymap.set('n', '<leader>cc', cmake.select_configure_preset, { desc = '[C]Make [C]onfigure Preset' })
+vim.keymap.set('n', '<leader>cb', cmake.select_build_preset, { desc = '[C]Make [B]uild Preset' })
+vim.keymap.set('n', '<leader>cp', cmake.toggle_panel, { desc = '[C]Make Toggle [P]anel' })
+
+-- Neotest
 local function runNearest()
   require('neotest').summary.open()
   require('neotest').run.run()
@@ -14,20 +33,18 @@ local function runAll()
   require('neotest').summary.open()
   require('neotest').run.run(vim.fn.expand '%')
 end
-
 local function debugNearest()
   require('neotest').summary.open()
   require('neotest').run.run { strategy = 'dap' }
 end
 
-vim.keymap.set('n', '<s-F9>', debugNearest, { desc = 'debug nearest test' })
-vim.keymap.set('n', '<F18>', debugNearest, { desc = 'debug nearest test' })
-
-vim.keymap.set('n', '<s-F10>', runNearest, { desc = 'run nearest test' })
-vim.keymap.set('n', '<F22>', runNearest, { desc = 'run nearest test' })
-
-vim.keymap.set('n', '<F24>', runAll, { desc = 'run all tests' })
-vim.keymap.set('n', '<s-F12>', runAll, { desc = 'run all tests' })
+vim.keymap.set('n', '<s-F9>', debugNearest, { desc = 'Debug nearest test' })
+vim.keymap.set('n', '<F18>', debugNearest, { desc = 'Debug nearest test' })
+vim.keymap.set('n', '<leader>tn', runNearest, { desc = '[T]est [N]earest' })
+vim.keymap.set('n', '<leader>ta', runAll, { desc = '[T]est [A]ll' })
 
 vim.keymap.set('n', '<leader>Q', require('dapui').toggle, { desc = 'Open dapui' })
 vim.keymap.set('n', '<leader>W', require('dap').repl.open, { desc = 'Open repl' })
+
+-- Winbar showing current CMake target (CLion-style)
+vim.opt.winbar = "%{%v:lua.require('custom.cmake').winbar()%}"
