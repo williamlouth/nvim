@@ -46,5 +46,6 @@ vim.keymap.set('n', '<leader>ta', runAll, { desc = '[T]est [A]ll' })
 vim.keymap.set('n', '<leader>Q', require('dapui').toggle, { desc = 'Open dapui' })
 vim.keymap.set('n', '<leader>W', require('dap').repl.open, { desc = 'Open repl' })
 
--- Winbar showing current CMake target (CLion-style)
-vim.opt.winbar = "%{%v:lua.require('custom.cmake').winbar()%}"
+-- Tabline showing CMake presets + target (CLion-style, appears once at top)
+vim.o.showtabline = 2 -- always show
+vim.o.tabline = "%{%v:lua.require('custom.cmake').winbar()%}"

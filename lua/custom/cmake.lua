@@ -7,6 +7,25 @@ M.last_run_target = nil
 M.configure_preset = nil
 M.build_preset = nil
 
+-- Target history (most recent first, max 5)
+local target_history = {}
+
+local function add_to_target_history(name)
+  -- Remove if already present
+  for i, t in ipairs(target_history) do
+    if t == name then
+      table.remove(target_history, i)
+      break
+    end
+  end
+  -- Insert at front
+  table.insert(target_history, 1, name)
+  -- Cap at 5
+  while #target_history > 5 do
+    table.remove(target_history)
+  end
+end
+
 -- Panel state
 local panel = {
   win = nil,
@@ -120,17 +139,18 @@ end
 --- Build the winbar string with clickable tabs for the panel
 local function panel_winbar()
   local tabs = { 'configure', 'build', 'run' }
-  local labels = { configure = ' Configure', build = ' Build', run = ' Run' }
+  local labels = { configure = ' CMake', build = ' Build', run = ' Run' }
   local parts = {}
+  -- Stop button first (far left) if something is running
+  if panel.active_tab and panel.jobs[panel.active_tab] then
+    local stop_click = '%@v:lua.cmake_click_stop@'
+    table.insert(parts, stop_click .. '%#CMakePanelStop#  Stop %X')
+  end
   for _, tab in ipairs(tabs) do
     local hl = (panel.active_tab == tab) and '%#CMakePanelActive#' or '%#CMakePanelInactive#'
     local click = string.format('%%@v:lua.cmake_click_%s@', tab)
     table.insert(parts, click .. hl .. ' ' .. labels[tab] .. ' %X')
   end
-  -- Add target selector button
-  local target_label = M.last_target or 'select target'
-  local target_click = '%@v:lua.cmake_click_target@'
-  table.insert(parts, target_click .. '%#CMakePanelTarget# 🎯 ' .. target_label .. ' %X')
   return table.concat(parts, '%#CMakePanelSep# │ ')
 end
 
@@ -228,6 +248,24 @@ local function run_in_panel(tab, cmd)
   vim.api.nvim_set_current_win(cur_win)
 end
 
+--- Stop the currently active tab's job
+function M.stop_current()
+  local tab = panel.active_tab
+  if not tab then
+    notify('Nothing running.', vim.log.levels.INFO)
+    return
+  end
+  if panel.jobs[tab] then
+    kill_job(tab)
+    notify('Stopped: ' .. tab)
+    if panel_is_open() then
+      vim.wo[panel.win].winbar = panel_winbar()
+    end
+  else
+    notify('Nothing running in ' .. tab .. ' tab.', vim.log.levels.INFO)
+  end
+end
+
 -- Global click handlers for panel winbar tabs
 -- Signature: (minwid, clicks, button, modifiers) required by %@ statusline clicks
 _G.cmake_click_configure = function(_, _, _, _)
@@ -242,8 +280,20 @@ _G.cmake_click_run = function(_, _, _, _)
   show_tab 'run'
 end
 
+_G.cmake_click_stop = function(_, _, _, _)
+  M.stop_current()
+end
+
 _G.cmake_click_target = function(_, _, _, _)
   M.select_target()
+end
+
+_G.cmake_click_configure_preset = function(_, _, _, _)
+  M.select_configure_preset()
+end
+
+_G.cmake_click_build_preset = function(_, _, _, _)
+  M.select_build_preset()
 end
 
 --- Run cmake configure (Shift+F12)
@@ -448,16 +498,41 @@ end
 --- Select a build/run target via selector
 function M.select_target()
   get_targets(function(targets)
-    -- Build display list with type annotations
-    local display = {}
-    for _, t in ipairs(targets) do
-      table.insert(display, t.name .. ' (' .. t.type .. ')')
+    -- Build items: recent history first, then all remaining targets
+    local items = {}
+    local seen = {}
+
+    -- Add recent targets first (if they still exist in current targets)
+    for _, hist_name in ipairs(target_history) do
+      for _, t in ipairs(targets) do
+        if t.name == hist_name then
+          table.insert(items, { name = t.name, type = t.type, recent = true })
+          seen[t.name] = true
+          break
+        end
+      end
     end
-    vim.ui.select(display, { prompt = 'Select CMake target:' }, function(_, idx)
+
+    -- Add separator and remaining targets
+    for _, t in ipairs(targets) do
+      if not seen[t.name] then
+        table.insert(items, { name = t.name, type = t.type, recent = false })
+      end
+    end
+
+    -- Build display list
+    local display = {}
+    for _, item in ipairs(items) do
+      local prefix = item.recent and '⏱ ' or '  '
+      table.insert(display, prefix .. item.name .. ' (' .. item.type .. ')')
+    end
+
+    vim.ui.select(display, { prompt = 'Select CMake target (recent first):' }, function(_, idx)
       if idx then
-        local choice = targets[idx].name
+        local choice = items[idx].name
         M.last_target = choice
         M.last_run_target = choice
+        add_to_target_history(choice)
         notify('Target set: ' .. choice)
         if panel_is_open() then
           vim.wo[panel.win].winbar = panel_winbar()
@@ -518,10 +593,28 @@ function M.toggle_panel()
   end
 end
 
---- Get the winbar display string for editor windows (clickable to select target)
+--- Get the winbar display string for editor windows
+--- Shows: [configure preset] | [build preset] | [target]
+--- Each is clickable to select/change
 function M.winbar()
+  local parts = {}
+
+  -- Configure preset (clickable)
+  local cfg_label = M.configure_preset or '[configure]'
+  local cfg_click = '%@v:lua.cmake_click_configure_preset@'
+  table.insert(parts, cfg_click .. '%#CMakePreset#  ' .. cfg_label .. ' %X')
+
+  -- Build preset (clickable)
+  local bld_label = M.build_preset or '[build]'
+  local bld_click = '%@v:lua.cmake_click_build_preset@'
+  table.insert(parts, bld_click .. '%#CMakePreset#  ' .. bld_label .. ' %X')
+
+  -- Target (clickable)
   local target = M.last_target or '[no target]'
-  return '%@v:lua.cmake_click_target@%#CMakeTarget# CMake: ' .. target .. ' %X%*'
+  local tgt_click = '%@v:lua.cmake_click_target@'
+  table.insert(parts, tgt_click .. '%#CMakeTarget# 🎯 ' .. target .. ' %X')
+
+  return '%=' .. table.concat(parts, '%#CMakePanelSep# │ ') .. '%*'
 end
 
 -- Setup highlights
@@ -530,7 +623,9 @@ local function set_highlights()
   vim.api.nvim_set_hl(0, 'CMakePanelInactive', { fg = '#a9b1d6', bg = '#24283b' })
   vim.api.nvim_set_hl(0, 'CMakePanelSep', { fg = '#565f89', bg = '#24283b' })
   vim.api.nvim_set_hl(0, 'CMakePanelTarget', { fg = '#9ece6a', bg = '#24283b', bold = true })
+  vim.api.nvim_set_hl(0, 'CMakePanelStop', { fg = '#f7768e', bg = '#24283b', bold = true })
   vim.api.nvim_set_hl(0, 'CMakeTarget', { fg = '#7aa2f7', bold = true })
+  vim.api.nvim_set_hl(0, 'CMakePreset', { fg = '#bb9af7', bold = true })
 end
 
 vim.api.nvim_create_autocmd('ColorScheme', {
