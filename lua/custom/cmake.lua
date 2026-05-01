@@ -33,6 +33,7 @@ local panel = {
   jobs = { configure = nil, build = nil, run = nil },
   active_tab = nil,
   height = 15,
+  collapsed = false,
 }
 
 local function notify(msg, level)
@@ -151,7 +152,11 @@ local function panel_winbar()
     local click = string.format('%%@v:lua.cmake_click_%s@', tab)
     table.insert(parts, click .. hl .. ' ' .. labels[tab] .. ' %X')
   end
-  return table.concat(parts, '%#CMakePanelSep# │ ')
+  local left = table.concat(parts, '%#CMakePanelSep# │ ')
+  -- Close button on far right
+  local close_click = '%@v:lua.cmake_click_close@'
+  local close_btn = close_click .. '%#CMakePanelClose# X %X'
+  return left .. '%=' .. close_btn
 end
 
 --- Ensure the panel window exists at the bottom
@@ -179,6 +184,12 @@ local function show_tab(tab)
   ensure_panel()
   panel.active_tab = tab
 
+  -- Expand if collapsed
+  if panel.collapsed then
+    panel.collapsed = false
+    vim.api.nvim_win_set_height(panel.win, panel.height)
+  end
+
   local buf = panel.bufs[tab]
   if buf and vim.api.nvim_buf_is_valid(buf) then
     vim.api.nvim_win_set_buf(panel.win, buf)
@@ -198,7 +209,10 @@ local function kill_job(tab)
 end
 
 --- Create a fresh terminal buffer for a tab and run a command
-local function run_in_panel(tab, cmd)
+--- @param tab string
+--- @param cmd string
+--- @param on_complete function|nil called with exit_code when job finishes
+local function run_in_panel(tab, cmd, on_complete)
   kill_job(tab)
 
   local old_buf = panel.bufs[tab]
@@ -216,8 +230,13 @@ local function run_in_panel(tab, cmd)
   vim.api.nvim_win_set_buf(panel.win, new_buf)
 
   local job_id = vim.fn.termopen(cmd, {
-    on_exit = function()
+    on_exit = function(_, exit_code)
       panel.jobs[tab] = nil
+      if on_complete then
+        vim.schedule(function()
+          on_complete(exit_code)
+        end)
+      end
     end,
   })
 
@@ -266,6 +285,19 @@ function M.stop_current()
   end
 end
 
+--- Collapse panel to just the tab bar (jobs keep running)
+function M.collapse_panel()
+  if not panel_is_open() then
+    return
+  end
+  panel.collapsed = true
+  -- Swap to a blank buffer so no distracting content shows
+  local blank = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_win_set_buf(panel.win, blank)
+  vim.api.nvim_win_set_height(panel.win, 1)
+  vim.wo[panel.win].winbar = panel_winbar()
+end
+
 -- Global click handlers for panel winbar tabs
 -- Signature: (minwid, clicks, button, modifiers) required by %@ statusline clicks
 _G.cmake_click_configure = function(_, _, _, _)
@@ -282,6 +314,10 @@ end
 
 _G.cmake_click_stop = function(_, _, _, _)
   M.stop_current()
+end
+
+_G.cmake_click_close = function(_, _, _, _)
+  M.collapse_panel()
 end
 
 _G.cmake_click_target = function(_, _, _, _)
@@ -348,7 +384,7 @@ function M.configure()
   end
 end
 
---- Build project or specific target (Shift+F11)
+--- Build all targets (Shift+F11)
 function M.build()
   local build_presets = get_build_presets()
 
@@ -356,10 +392,7 @@ function M.build()
     local function do_build(preset)
       M.build_preset = preset
       local cmd = 'cmake --build --preset ' .. preset
-      if M.last_target then
-        cmd = cmd .. ' --target ' .. M.last_target
-      end
-      notify('Building preset: ' .. preset)
+      notify('Building all (preset: ' .. preset .. ')')
       run_in_panel('build', cmd)
     end
 
@@ -378,35 +411,61 @@ function M.build()
       notify('No build system found. Run CMake configure first (Shift+F12).', vim.log.levels.WARN)
       return
     end
-    local cmd = 'cmake --build ' .. M.build_dir
-    if M.last_target then
-      cmd = cmd .. ' --target ' .. M.last_target
-    end
-    notify('Building...')
+    local cmd = 'cmake --build ' .. build_dir
+    notify('Building all...')
     run_in_panel('build', cmd)
   end
 end
 
---- Run last target (Shift+F10)
+--- Build target then run it (Shift+F10)
 function M.run_last()
   if not M.last_run_target then
     notify('No run target selected. Use <leader>cr to select one.', vim.log.levels.WARN)
     return
   end
-  local executable = get_build_dir() .. '/' .. M.last_run_target
-  if not file_exists(executable) then
-    local found = vim.fn.globpath(get_build_dir(), '**/' .. vim.fn.fnamemodify(M.last_run_target, ':t'), false, true)
-    if type(found) == 'table' and #found > 0 then
-      executable = found[1]
-    elseif type(found) == 'string' and found ~= '' then
-      executable = vim.split(found, '\n')[1]
-    else
-      notify('Executable not found: ' .. M.last_run_target .. '. Build first (Shift+F11).', vim.log.levels.WARN)
+
+  local target = M.last_run_target
+  local build_dir = get_build_dir()
+
+  -- Helper to find and run the executable
+  local function do_run()
+    local executable = build_dir .. '/' .. target
+    if not file_exists(executable) then
+      local found = vim.fn.globpath(build_dir, '**/' .. vim.fn.fnamemodify(target, ':t'), false, true)
+      if type(found) == 'table' and #found > 0 then
+        executable = found[1]
+      elseif type(found) == 'string' and found ~= '' then
+        executable = vim.split(found, '\n')[1]
+      else
+        notify('Executable not found: ' .. target, vim.log.levels.WARN)
+        return
+      end
+    end
+    notify('Running: ' .. vim.fn.fnamemodify(executable, ':t'))
+    run_in_panel('run', executable)
+  end
+
+  -- Build the target first, then run on success
+  local build_presets = get_build_presets()
+  local cmd
+  if #build_presets > 0 and M.build_preset then
+    cmd = 'cmake --build --preset ' .. M.build_preset .. ' --target ' .. target
+  else
+    if not file_exists(build_dir .. '/build.ninja') and not file_exists(build_dir .. '/Makefile') then
+      notify('No build system found. Run CMake configure first (Shift+F12).', vim.log.levels.WARN)
       return
     end
+    cmd = 'cmake --build ' .. build_dir .. ' --target ' .. target
   end
-  notify('Running: ' .. vim.fn.fnamemodify(executable, ':t'))
-  run_in_panel('run', executable)
+
+  notify('Building ' .. target .. '...')
+  run_in_panel('build', cmd, function(exit_code)
+    if exit_code == 0 then
+      do_run()
+    else
+      notify('Build failed (exit ' .. exit_code .. '). Not running.', vim.log.levels.ERROR)
+    end
+  end)
 end
 
 --- Get list of targets using the CMake File API (codemodel)
@@ -624,6 +683,7 @@ local function set_highlights()
   vim.api.nvim_set_hl(0, 'CMakePanelSep', { fg = '#565f89', bg = '#24283b' })
   vim.api.nvim_set_hl(0, 'CMakePanelTarget', { fg = '#9ece6a', bg = '#24283b', bold = true })
   vim.api.nvim_set_hl(0, 'CMakePanelStop', { fg = '#f7768e', bg = '#24283b', bold = true })
+  vim.api.nvim_set_hl(0, 'CMakePanelClose', { fg = '#f7768e', bg = '#24283b', bold = true })
   vim.api.nvim_set_hl(0, 'CMakeTarget', { fg = '#7aa2f7', bold = true })
   vim.api.nvim_set_hl(0, 'CMakePreset', { fg = '#bb9af7', bold = true })
 end
