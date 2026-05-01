@@ -11,18 +11,29 @@ local cmake = require 'custom.cmake'
 
 vim.keymap.set('n', '<s-F12>', cmake.configure, { desc = 'CMake Configure' })
 vim.keymap.set('n', '<F24>', cmake.configure, { desc = 'CMake Configure' })
+vim.keymap.set('t', '<s-F12>', function() vim.cmd 'stopinsert'; cmake.configure() end, { desc = 'CMake Configure' })
+vim.keymap.set('t', '<F24>', function() vim.cmd 'stopinsert'; cmake.configure() end, { desc = 'CMake Configure' })
 
 vim.keymap.set('n', '<s-F11>', cmake.build, { desc = 'CMake Build' })
 vim.keymap.set('n', '<F23>', cmake.build, { desc = 'CMake Build' })
+vim.keymap.set('t', '<s-F11>', function() vim.cmd 'stopinsert'; cmake.build() end, { desc = 'CMake Build' })
+vim.keymap.set('t', '<F23>', function() vim.cmd 'stopinsert'; cmake.build() end, { desc = 'CMake Build' })
 
 vim.keymap.set('n', '<s-F10>', cmake.run_last, { desc = 'Run Last Target' })
 vim.keymap.set('n', '<F22>', cmake.run_last, { desc = 'Run Last Target' })
+vim.keymap.set('t', '<s-F10>', function() vim.cmd 'stopinsert'; cmake.run_last() end, { desc = 'Run Last Target' })
+vim.keymap.set('t', '<F22>', function() vim.cmd 'stopinsert'; cmake.run_last() end, { desc = 'Run Last Target' })
 
 vim.keymap.set('n', '<leader>cr', cmake.select_target, { desc = '[C]Make Select [R]un Target' })
 vim.keymap.set('n', '<leader>ct', cmake.select_target, { desc = '[C]Make Select [T]arget' })
 vim.keymap.set('n', '<leader>cc', cmake.select_configure_preset, { desc = '[C]Make [C]onfigure Preset' })
 vim.keymap.set('n', '<leader>cb', cmake.select_build_preset, { desc = '[C]Make [B]uild Preset' })
 vim.keymap.set('n', '<leader>cp', cmake.toggle_panel, { desc = '[C]Make Toggle [P]anel' })
+
+vim.keymap.set('n', '<A-F12>', function() cmake.show_terminal({ focus = true }) end, { desc = 'Open Terminal' })
+vim.keymap.set('n', '<F60>', function() cmake.show_terminal({ focus = true }) end, { desc = 'Open Terminal' })
+vim.keymap.set('t', '<A-F12>', '<C-\\><C-n><C-w>p', { desc = 'Leave Terminal' })
+vim.keymap.set('t', '<F60>', '<C-\\><C-n><C-w>p', { desc = 'Leave Terminal' })
 
 -- Neotest
 local function runNearest()
@@ -46,6 +57,5 @@ vim.keymap.set('n', '<leader>ta', runAll, { desc = '[T]est [A]ll' })
 vim.keymap.set('n', '<leader>Q', require('dapui').toggle, { desc = 'Open dapui' })
 vim.keymap.set('n', '<leader>W', require('dap').repl.open, { desc = 'Open repl' })
 
--- Tabline showing CMake presets + target (CLion-style, appears once at top)
-vim.o.showtabline = 2 -- always show
-vim.o.tabline = "%{%v:lua.require('custom.cmake').winbar()%}"
+-- CMake presets/target shown in tabline above bufferline (with click handlers)
+vim.o.showtabline = 2

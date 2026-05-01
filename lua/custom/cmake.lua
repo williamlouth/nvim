@@ -29,8 +29,8 @@ end
 -- Panel state
 local panel = {
   win = nil,
-  bufs = { configure = nil, build = nil, run = nil },
-  jobs = { configure = nil, build = nil, run = nil },
+  bufs = { configure = nil, build = nil, run = nil, terminal = nil },
+  jobs = { configure = nil, build = nil, run = nil, terminal = nil },
   active_tab = nil,
   height = 15,
   collapsed = false,
@@ -142,8 +142,8 @@ end
 
 --- Build the winbar string with clickable tabs for the panel
 local function panel_winbar()
-  local tabs = { 'configure', 'build', 'run' }
-  local labels = { configure = ' CMake', build = ' Build', run = ' Run' }
+  local tabs = { 'configure', 'build', 'run', 'terminal' }
+  local labels = { configure = ' CMake', build = ' Build', run = ' Run', terminal = ' Terminal' }
   local parts = {}
   -- Stop button first (far left) if something is running
   if panel.active_tab and panel.jobs[panel.active_tab] then
@@ -213,8 +213,8 @@ end
 
 --- Check if any job is currently running
 local function any_job_running()
-  for _, job_id in pairs(panel.jobs) do
-    if job_id then
+  for tab, job_id in pairs(panel.jobs) do
+    if job_id and tab ~= 'terminal' then
       return true
     end
   end
@@ -343,6 +343,10 @@ end
 
 _G.cmake_click_run = function(_, _, _, _)
   show_tab 'run'
+end
+
+_G.cmake_click_terminal = function(_, _, _, _)
+  M.show_terminal()
 end
 
 _G.cmake_click_stop = function(_, _, _, _)
@@ -712,6 +716,51 @@ function M.toggle_panel()
   end
 end
 
+--- Show or create the terminal tab (persistent shell session)
+--- @param opts table|nil { focus = bool }
+function M.show_terminal(opts)
+  opts = opts or {}
+  ensure_panel()
+
+  -- Expand if collapsed
+  if panel.collapsed then
+    panel.collapsed = false
+    vim.api.nvim_win_set_height(panel.win, panel.height)
+  end
+
+  panel.active_tab = 'terminal'
+
+  -- Reuse existing terminal buffer if still valid
+  local buf = panel.bufs.terminal
+  if buf and vim.api.nvim_buf_is_valid(buf) then
+    vim.api.nvim_win_set_buf(panel.win, buf)
+  else
+    -- Create a new terminal
+    local cur_win = vim.api.nvim_get_current_win()
+    vim.api.nvim_set_current_win(panel.win)
+    local new_buf = vim.api.nvim_create_buf(false, true)
+    vim.api.nvim_win_set_buf(panel.win, new_buf)
+    local job_id = vim.fn.termopen(vim.o.shell, {
+      on_exit = function()
+        panel.jobs.terminal = nil
+        panel.bufs.terminal = nil
+      end,
+    })
+    panel.jobs.terminal = job_id
+    panel.bufs.terminal = vim.api.nvim_get_current_buf()
+    if not opts.focus then
+      vim.api.nvim_set_current_win(cur_win)
+    end
+  end
+
+  if opts.focus then
+    vim.api.nvim_set_current_win(panel.win)
+    vim.cmd 'startinsert'
+  end
+
+  vim.wo[panel.win].winbar = panel_winbar()
+end
+
 --- Get the winbar display string for editor windows
 --- Shows: [configure preset] | [build preset] | [target]
 --- Each is clickable to select/change
@@ -754,5 +803,30 @@ vim.api.nvim_create_autocmd('ColorScheme', {
 })
 
 set_highlights()
+
+-- Auto-enter insert mode when entering the terminal panel buffer
+vim.api.nvim_create_autocmd({ 'BufEnter', 'WinEnter' }, {
+  group = vim.api.nvim_create_augroup('CMakePanelTermInsert', { clear = true }),
+  callback = function()
+    if panel_is_open() and panel.active_tab == 'terminal' then
+      local buf = vim.api.nvim_win_get_buf(panel.win)
+      if buf == panel.bufs.terminal and vim.api.nvim_get_current_win() == panel.win then
+        vim.cmd 'startinsert'
+      end
+    end
+  end,
+})
+
+-- Keep insert mode in terminal: remap Esc to send Esc to the shell, use Ctrl-w for window nav
+vim.api.nvim_create_autocmd('TermOpen', {
+  group = vim.api.nvim_create_augroup('CMakeTermKeymaps', { clear = true }),
+  callback = function(args)
+    local buf = args.buf
+    -- Esc stays in insert mode (sends literal Esc to the terminal)
+    vim.keymap.set('t', '<Esc>', '<Esc>', { buffer = buf, nowait = true })
+    -- Ctrl-w still lets you navigate away from terminal
+    vim.keymap.set('t', '<C-w>', '<C-\\><C-n><C-w>', { buffer = buf, nowait = true })
+  end,
+})
 
 return M
